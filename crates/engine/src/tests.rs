@@ -1670,6 +1670,19 @@ fn print_restricted_documents_disable_print_unless_opened_by_the_owner() {
     assert!(enabled(&s, low, "print.dialog"), "low-resolution printing is printing");
 }
 
+/// The dialog's tile choice lays out with exactly the sizes printing lays out (`print_sizes`),
+/// not with the f32 `DocInfo` sizes: a page whose points only survive f64 tiles identically, so
+/// the chosen tile positions are the sheets the print really has.
+#[test]
+fn print_sizes_are_the_sizes_printing_lays_out() {
+    let mut s = Session::new();
+    let bytes = s.create_blank(100.123, 200.456, 2).unwrap();
+    let id = s.open("exact.pdf", None, bytes, None).unwrap();
+    assert_eq!(s.print_sizes(id), [(100.123, 200.456), (100.123, 200.456)]);
+    // The f32 `DocInfo` width would not round-trip: that is the mismatch this avoids.
+    assert_ne!(f64::from(s.get(id).unwrap().info.pages[0].width), 100.123);
+}
+
 /// Table 22, bit 12 clear: printing is limited to a low-level representation. Whatever the
 /// settings ask for, the print-ready PDF carries each page as a picture of at most 150 dpi, with
 /// no text or vector artwork left; the owner password lifts the limit.

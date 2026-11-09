@@ -92,14 +92,19 @@ pub(crate) fn body(
     ui.set_width(820.0);
     ui.label(egui::RichText::new(tl!("Print")).font(theme::semibold(18.0)));
     ui.add_space(8.0);
-    let settings = d.settings(sizes, labels);
-    // The preview pages through every sheet the chosen pages tile into, so the person can reach
-    // the tiles a poster tile choice left out; `kept` is how many of them print.
-    let mut every_sheet = settings.clone();
-    if let Ok(s) = &mut every_sheet {
-        s.tiles = None;
-    }
-    let sheets = every_sheet.ok().and_then(|s| print::layout(sizes, &s).ok()).unwrap_or_default();
+    let base = d.base_settings(sizes, labels);
+    // The one layout of this frame drives both the preview and the tile count. The preview keeps
+    // every sheet whether or not the tile choice resolves, so a choice that excludes the shown
+    // tile (Current page under the odd/even subset) never blanks the preview or strands the
+    // pager; `settings` carries the choice and gates printing.
+    let (settings, sheets) = match &base {
+        Ok(s) => match print::layout(sizes, s) {
+            Ok(sheets) => (d.with_tiles(s, sheets.len()), sheets),
+            Err(e) => (Err(e.said(&crate::i18n::words)), Vec::new()),
+        },
+        Err(e) => (Err(e.clone()), Vec::new()),
+    };
+    // How many of them print under the tile choice (all of them when the choice is absent).
     let kept = settings.as_ref().map(|s| s.tiles.as_ref().map_or(sheets.len(), Vec::len)).unwrap_or(0);
     d.sheet = d.sheet.min(sheets.len().saturating_sub(1));
     ui.horizontal_top(|ui| {
@@ -294,7 +299,9 @@ pub(crate) fn body(
                 );
                 ui.add(widgets::checkbox(&mut d.reverse, tl!("Reverse pages")));
             });
-            if d.handling == Handling::Poster && matches!(d.which, Which::Current | Which::Range) && settings.is_ok() {
+            // The choice excluding tiles is what the line says: Current page and a range leave
+            // tiles out, and so does All under the odd/even subset.
+            if d.handling == Handling::Poster && settings.is_ok() && kept != sheets.len() {
                 let line = crate::i18n::fmt(
                     tl!("{k} of the {n} tiles will print."),
                     &[("k", &kept.to_string()), ("n", &sheets.len().to_string())],

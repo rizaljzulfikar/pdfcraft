@@ -182,8 +182,8 @@ impl PdfCraftApp {
     pub(crate) fn read_label_crops(&mut self, id: pdfcraft_engine::DocId) {
         let Some(doc) = self.session.get(id) else { return };
         let labels: Vec<String> = doc.info.pages.iter().map(|p| p.label.clone()).collect();
-        let sizes: Vec<(f64, f64)> = doc.info.pages.iter().map(|p| (f64::from(p.width), f64::from(p.height))).collect();
-        let mut pages = self.print_draft.settings(&sizes, &labels).map(|s| s.pages).unwrap_or_default();
+        let sizes = self.session.print_sizes(id);
+        let mut pages = self.print_draft.base_settings(&sizes, &labels).map(|s| s.pages).unwrap_or_default();
         pages.sort_unstable();
         pages.dedup();
         pages.truncate(LABEL_CROP_PAGES);
@@ -398,7 +398,8 @@ impl PdfCraftApp {
         let Some((_, id)) = self.active_ids() else { return false };
         let Some(doc) = self.session.get(id) else { return false };
         let labels: Vec<String> = doc.info.pages.iter().map(|p| p.label.clone()).collect();
-        let sizes: Vec<(f64, f64)> = doc.info.pages.iter().map(|p| (p.width as f64, p.height as f64)).collect();
+        // The exact sizes printing lays out, so the tile choice counts the sheets it will have.
+        let sizes = self.session.print_sizes(id);
         let settings = match self.print_draft.settings(&sizes, &labels) {
             Ok(s) => s,
             Err(e) => {
@@ -594,13 +595,9 @@ pub(crate) const PREVIEW_BYTES: f64 = 128.0 * 1024.0 * 1024.0;
 /// fill the preview pane (so the picture is not a stretched thumbnail), nearest sheet first and
 /// within [`PREVIEW_MAX_SIDE`] (and `max_side`, the GPU's texture limit) and [`PREVIEW_BYTES`].
 pub(crate) fn preview_rasters(d: &PrintDraft, sizes: &[(f64, f64)], labels: &[String], ppp: f32, max_side: f32) -> Vec<(usize, f32)> {
-    let mut settings = match d.settings(sizes, labels) {
-        Ok(s) => s,
-        Err(_) => return Vec::new(),
-    };
-    // Every sheet the pages tile into may be shown (the preview pages through them all), so the
-    // tile choice narrows nothing here: the rasters are per source page and shared by tiles.
-    settings.tiles = None;
+    // The base settings alone: every sheet the pages tile into may be shown, and the rasters are
+    // per source page and shared by tiles, so the tile choice narrows nothing here.
+    let Ok(settings) = d.base_settings(sizes, labels) else { return Vec::new() };
     let Ok(sheets) = print::layout(sizes, &settings) else { return Vec::new() };
     if sheets.is_empty() {
         return Vec::new();

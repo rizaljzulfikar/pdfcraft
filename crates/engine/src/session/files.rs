@@ -187,6 +187,22 @@ impl Session {
         (0..doc.info.pages.len()).map(|i| pages.contains(&i) && pdfcraft_print::text_reads_up(&cos, i)).collect()
     }
 
+    /// Each page's displayed size in points, exactly as printing lays it out
+    /// ([`pdfcraft_print::impose`]: the crop box times `/UserUnit`, turned by `/Rotate`). The
+    /// Print dialog tiles with these rather than the f32 `DocInfo` sizes, so the tile choice
+    /// counts the sheets the print will really have.
+    pub fn print_sizes(&self, id: DocId) -> Vec<(f64, f64)> {
+        let Some(doc) = self.get(id) else { return Vec::new() };
+        let cos = match doc.editor.as_ref() {
+            Some(e) => e.cos.clone(),
+            None => match pdfcraft_cos::Document::open_with_password(doc.bytes.clone(), doc.password.as_deref()) {
+                Ok(c) => c,
+                Err(_) => return Vec::new(),
+            },
+        };
+        pdfcraft_model::pages(&cos).iter().map(|p| p.display_size(&cos)).collect()
+    }
+
     /// Combine whole files, in order, into new PDF bytes (one bookmark per file).
     pub fn combine(&self, sources: &[(String, Arc<Vec<u8>>)]) -> Result<Arc<Vec<u8>>, EditError> {
         let docs = sources.iter().map(|(n, b)| open_source(n, b)).collect::<Result<Vec<_>, _>>()?;

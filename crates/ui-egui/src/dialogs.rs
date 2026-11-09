@@ -1320,7 +1320,7 @@ fn dialog_print(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending) -> 
         app.read_label_crops(id);
     }
     let Some(doc) = app.session.get(id) else { return false };
-    let sizes: Vec<(f64, f64)> = doc.info.pages.iter().map(|p| (p.width as f64, p.height as f64)).collect();
+    let sizes = app.session.print_sizes(id);
     let labels: Vec<String> = doc.info.pages.iter().map(|p| p.label.clone()).collect();
     let rasters = crate::print_ui::preview_rasters(
         &app.print_draft,

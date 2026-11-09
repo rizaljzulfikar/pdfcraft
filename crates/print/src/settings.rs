@@ -144,8 +144,9 @@ pub struct Settings {
     pub raster: Option<Raster>,
     /// Which of the laid-out sheets to print: 0-based positions into the sheet list `layout`
     /// builds, in print order (a repeated position prints its sheet again). Poster's tile
-    /// choice — the dialog's Pages to Print counts the generated tiles there. `None` keeps
-    /// every sheet.
+    /// choice, the dialog's Pages to Print counts the generated tiles there; `None` keeps
+    /// every sheet. A position past the laid-out sheets is a fault
+    /// (`Invalid("there is no sheet n")`), and an empty list prints nothing (`NoPages`).
     pub tiles: Option<Vec<usize>>,
 }
 

@@ -156,17 +156,17 @@ impl PrintDraft {
         }
     }
 
-    /// The engine settings for this print: the chosen document pages, and — in Poster — the
-    /// chosen tiles of the sheets they tile into. `sizes` is each document page's display size.
-    pub fn settings(&self, sizes: &[(f64, f64)], labels: &[String]) -> Result<print::Settings, String> {
+    /// The settings for the document-page selection and the layout: everything the sheets are
+    /// laid out from, with `tiles` left empty for [`Self::with_tiles`] to resolve. In Poster the
+    /// document pages stay the whole document there, since the choice picks from the generated
+    /// tiles rather than the pages; pages picked in the panel keep their document-page meaning.
+    /// `sizes` is each document page's display size, exactly as printing reads it
+    /// (`Session::print_sizes`), so the tiles resolved against these sheets are the sheets the
+    /// print will really have.
+    pub fn base_settings(&self, sizes: &[(f64, f64)], labels: &[String]) -> Result<print::Settings, String> {
         if self.cut_and_stack() && matches!(self.duplex, Some(spool::Duplex::LongEdge | spool::Duplex::ShortEdge)) {
             return Err("Cut and stack needs Two-sided: Off. Print single-sided sheets.".into());
         }
-        // In Poster the Pages to Print choice counts the generated tiles, not the document pages:
-        // what the pages of a big drawing are tiled into is what there is to pick from. Every
-        // document page is tiled and the choice — a range, the tile in the preview, the subset —
-        // picks from the sheets, resolved below once they have been laid out. Pages picked in the
-        // panel keep their document-page meaning.
         let poster_tiles = self.handling == Handling::Poster && self.which != Which::Selected;
         let range = match self.which {
             Which::All | Which::Selected | Which::Current => None,
@@ -201,7 +201,7 @@ impl PrintDraft {
             Handling::Poster => Layout::Poster { scale: self.poster_scale, overlap: self.overlap, cut_marks: self.cut_marks },
             Handling::Label => Layout::Label { flip: self.label_flip },
         };
-        let mut settings = print::Settings {
+        Ok(print::Settings {
             pages,
             paper: PAPERS[self.paper.min(PAPERS.len() - 1)].1,
             orientation: self.orientation,
@@ -210,16 +210,32 @@ impl PrintDraft {
             raster: self.as_image.then_some(print::Raster { dpi: self.dpi, grayscale: self.grayscale }),
             crops: self.crops.clone(),
             tiles: None,
-        };
-        // The tiles only exist once the sheets are laid out, so the choice resolves against that
-        // count. All with every tile kept stays `None`, which the engine prints as all sheets.
-        if poster_tiles {
-            let sheets = print::layout(sizes, &settings).map_err(|e| e.said(&crate::i18n::words))?;
-            let tiles = self.tile_selection(sheets.len())?;
-            let every_tile = tiles.len() == sheets.len() && tiles.iter().enumerate().all(|(i, &t)| t == i);
-            settings.tiles = (!every_tile).then_some(tiles);
+        })
+    }
+
+    /// The engine settings for this print: the base selection plus, in Poster, the tile choice
+    /// resolved against `sheet_count`, the sheets [`Self::base_settings`] lays out.
+    pub fn with_tiles(&self, settings: &print::Settings, sheet_count: usize) -> Result<print::Settings, String> {
+        // In Poster the Pages to Print choice counts the generated tiles, not the document pages:
+        // what the pages of a big drawing are tiled into is what there is to pick from. Pages
+        // picked in the panel keep their document-page meaning, and other layouts have no tiles.
+        if self.handling != Handling::Poster || self.which == Which::Selected {
+            return Ok(settings.clone());
         }
+        let mut settings = settings.clone();
+        let tiles = self.tile_selection(sheet_count)?;
+        let every_tile = tiles.len() == sheet_count && tiles.iter().enumerate().all(|(i, &t)| t == i);
+        settings.tiles = (!every_tile).then_some(tiles);
         Ok(settings)
+    }
+
+    /// The engine settings for this print: the base selection and the poster tile choice, laid
+    /// out once here. Callers that already have the sheets use [`Self::base_settings`] and
+    /// [`Self::with_tiles`] instead, so the layout runs once for them too.
+    pub fn settings(&self, sizes: &[(f64, f64)], labels: &[String]) -> Result<print::Settings, String> {
+        let settings = self.base_settings(sizes, labels)?;
+        let sheets = print::layout(sizes, &settings).map_err(|e| e.said(&crate::i18n::words))?;
+        self.with_tiles(&settings, sheets.len())
     }
 
     /// Poster: which tiles (0-based, in tile order) the Pages to Print choice keeps, out of

@@ -121,15 +121,50 @@ fn print_dialog_lays_out_sheets_and_saves_a_pdf() {
     let _ = std::fs::remove_file(out);
 }
 
+/// A 2-page 200×300 PDF whose every page is four quadrants, so a saved tile's content says which
+/// quadrant it showed: top-left red, top-right yellow, bottom-left blue, bottom-right green.
+fn quadrant_tiles_pdf() -> Vec<u8> {
+    let quads = "1 0 0 rg 0 150 100 150 re f 1 1 0 rg 100 150 100 150 re f 0 0 1 rg 0 0 100 150 re f 0 1 0 rg 100 0 100 150 re f";
+    let mut objects =
+        vec!["<< /Type /Catalog /Pages 2 0 R >>".to_owned(), "<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 /MediaBox [0 0 200 300] >>".to_owned()];
+    for i in 0..2 {
+        objects.push(format!("<< /Type /Page /Parent 2 0 R /Resources << >> /Contents {} 0 R >>", 4 + i * 2));
+        objects.push(format!("<< /Length {} >>\nstream\n{quads}\nendstream", quads.len()));
+    }
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, object) in objects.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+    for offset in offsets {
+        bytes.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer << /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
+    bytes
+}
+
+/// The colour at (`x`, `y` up from the sheet's bottom-left) of page `page` of a saved print,
+/// rendered at 1 px per point.
+fn sampled(bytes: &[u8], page: usize, x: f64, y: f64) -> [u8; 3] {
+    let mut renderer = pdfcraft_render::PageRenderer::new(std::sync::Arc::new(bytes.to_vec()), Default::default());
+    let shot = renderer.render(pdfcraft_render::RenderRequest { page, scale: 1.0, ..Default::default() });
+    assert!(shot.error.is_none(), "{:?}", shot.error);
+    let (w, h) = (shot.width as usize, shot.height as usize);
+    let o = ((h - 1 - (y as usize).min(h - 1)) * w + (x as usize).min(w - 1)) * 4;
+    [shot.rgba[o], shot.rgba[o + 1], shot.rgba[o + 2]]
+}
+
 /// Poster's Pages to Print selects the generated tiles: a typed range saves exactly those
-/// sheets, and Current page saves the tile the preview shows. Outside Poster the choice keeps
-/// counting document pages.
+/// sheets (their content is the quadrants those tiles show), and Current page saves the tile
+/// the preview shows. Outside Poster the choice keeps counting document pages.
 #[test]
 fn poster_pages_to_print_select_the_generated_tiles() {
     let mut h = harness();
-    // Two 200×300 pages; Poster at 400 % tiles each 2 × 2: 8 sheets in all.
-    let bytes = h.state().session.create_blank(200.0, 300.0, 2).unwrap();
-    h.state_mut().open_bytes("tiled.pdf", None, bytes.as_ref().clone()).unwrap();
+    // Two 200×300 quadrant pages; Poster at 400 % tiles each 2 × 2: 8 sheets in all.
+    h.state_mut().open_bytes("tiled.pdf", None, quadrant_tiles_pdf()).unwrap();
     h.run_steps(3);
     assert!(h.state_mut().execute("print.dialog"));
     h.run_steps(3);
@@ -138,7 +173,7 @@ fn poster_pages_to_print_select_the_generated_tiles() {
     h.state_mut().print_draft.poster_scale = 400.0;
     h.run_steps(2);
     h.get_by_label("Sheet 1 of 8");
-    // Tiles 6 and 7 through the range field.
+    // Tiles 6 and 7 through the range field: page 2's top-right and bottom-left tiles.
     h.get_by_role_and_label(Role::RadioButton, "Pages").click();
     h.run_steps(2);
     h.get_by_role_and_label(Role::TextInput, "Pages").click();
@@ -152,14 +187,19 @@ fn poster_pages_to_print_select_the_generated_tiles() {
     h.get_by_label("Save as PDF").click();
     h.run_steps(3);
     assert_eq!(h.state().dialog, None);
-    let printed = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(&out).unwrap())).unwrap();
+    let saved = std::fs::read(&out).unwrap();
+    let printed = pdfcraft_cos::Document::open(std::sync::Arc::new(saved.clone())).unwrap();
     let pages = pdfcraft_model::pages(&printed);
     assert_eq!(pages.len(), 2, "tiles 6 and 7 only");
     let size = pages[0].display_size(&printed);
     assert!((size.0 - 612.0).abs() < 0.01 && (size.1 - 792.0).abs() < 0.01, "a Letter tile: {size:?}");
+    // Tile 6 shows page 2's top-right quadrant (yellow), tile 7 its bottom-left (blue): the
+    // saved content is those tiles, not the first two sheets.
+    assert_eq!(sampled(&saved, 0, 139.0, 396.0), [255, 255, 0], "tile 6 is page 2's top-right quadrant");
+    assert_eq!(sampled(&saved, 1, 306.0, 396.0), [0, 0, 255], "tile 7 is page 2's bottom-left quadrant");
     std::fs::remove_file(&out).unwrap();
 
-    // Current page is the tile the preview shows: sheet 4 of 8.
+    // Current page is the tile the preview shows: sheet 4 of 8, page 1's bottom-right quadrant.
     assert!(h.state_mut().execute("print.dialog"));
     h.run_steps(3);
     h.get_by_label("Poster").click();
@@ -175,8 +215,10 @@ fn poster_pages_to_print_select_the_generated_tiles() {
     h.run_steps(1);
     h.get_by_label("Save as PDF").click();
     h.run_steps(3);
-    let printed = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(&out).unwrap())).unwrap();
+    let saved = std::fs::read(&out).unwrap();
+    let printed = pdfcraft_cos::Document::open(std::sync::Arc::new(saved.clone())).unwrap();
     assert_eq!(pdfcraft_model::pages(&printed).len(), 1, "the tile in the preview");
+    assert_eq!(sampled(&saved, 0, 139.0, 396.0), [0, 255, 0], "sheet 4 is page 1's bottom-right quadrant");
     std::fs::remove_file(&out).unwrap();
 
     // In Size the typed range counts document pages again, not tiles.
@@ -191,13 +233,49 @@ fn poster_pages_to_print_select_the_generated_tiles() {
     h.key_press_modifiers(Modifiers::COMMAND, Key::A);
     h.get_by_role_and_label(Role::TextInput, "Pages").type_text("2");
     h.run_steps(3);
-    let sizes: Vec<_> = {
+    let sizes = {
         let id = h.state().views[h.state().active.unwrap()].id;
-        h.state().session.get(id).unwrap().info.pages.iter().map(|p| (f64::from(p.width), f64::from(p.height))).collect()
+        h.state().session.print_sizes(id)
     };
     let settings = h.state().print_draft.settings(&sizes, &[]).unwrap();
     assert_eq!(settings.pages, vec![1]);
     assert_eq!(settings.tiles, None);
+}
+
+/// The preview pages through every tile whether or not the tile choice resolves: Current page
+/// under the odd/even subset can exclude the very tile being viewed, and the preview must not
+/// blank or strand the pager then; the choice still gates printing through its error. All with
+/// the subset also says how many tiles will print.
+#[test]
+fn poster_preview_survives_a_tile_choice_that_excludes_it() {
+    let mut h = harness();
+    let bytes = h.state().session.create_blank(200.0, 300.0, 2).unwrap();
+    h.state_mut().open_bytes("tiled.pdf", None, bytes.as_ref().clone()).unwrap();
+    h.run_steps(3);
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(3);
+    h.get_by_label("Poster").click();
+    h.run_steps(2);
+    h.state_mut().print_draft.poster_scale = 400.0;
+    h.run_steps(2);
+    // Tile 1 is being viewed (sheet 1); the odd/even subset excludes it.
+    h.get_by_role_and_label(Role::RadioButton, "Current page").click();
+    h.run_steps(2);
+    h.get_by_value("All pages in range").click();
+    h.run_steps(2);
+    h.get_by_label("Even pages only").click();
+    h.run_steps(3);
+    // The preview still shows and pages through all eight tiles, with the choice's error said.
+    h.get_by_label("Sheet 1 of 8");
+    h.get_by_label_contains("no pages to print");
+    h.get_by_label("›").click();
+    h.run_steps(3);
+    h.get_by_label("Sheet 2 of 8");
+    // All with the subset keeps every tile in the preview and says what will print.
+    h.get_by_role_and_label(Role::RadioButton, "All").click();
+    h.run_steps(3);
+    h.get_by_label_contains("4 of the 8 tiles will print");
+    h.get_by_label("Sheet 2 of 8");
 }
 
 /// Pages picked beforehand are what the dialog offers to print (Acrobat's "Selected pages").

@@ -251,15 +251,21 @@ fn poster_tiles_are_kept_by_their_position() {
         s.tiles = tiles;
         s
     };
-    // A 200×300 page at 400 % tiles 2 × 2 (see `posters_tile_with_overlap`); tiles 1 and 3 stay.
-    let sheets = layout(&[(200.0, 300.0)], &tiled(Some(vec![0, 2]))).unwrap();
-    assert_eq!(sheets.len(), 2);
-    assert_eq!(sheet_pages(&sheets), [vec![0], vec![0]]);
+    let all = layout(&[(200.0, 300.0)], &tiled(None)).unwrap();
+    assert_eq!(all.len(), 4, "a 200×300 page at 400 % tiles 2 × 2");
+    // The kept sheets are the laid-out sheets at those positions, not the first sheets: their
+    // windows (clip) and placement are the ones the unfiltered layout put there.
+    let kept = layout(&[(200.0, 300.0)], &tiled(Some(vec![0, 2]))).unwrap();
+    assert_eq!(kept, [all[0].clone(), all[2].clone()], "the sheets at positions 0 and 2");
     assert_eq!(layout(&[(200.0, 300.0)], &tiled(Some(vec![4]))), Err(PrintError::Invalid("there is no sheet 5".into())));
     assert_eq!(layout(&[(200.0, 300.0)], &tiled(Some(Vec::new()))), Err(PrintError::NoPages));
-    assert_eq!(layout(&[(200.0, 300.0)], &tiled(Some(vec![1, 1]))).unwrap().len(), 2, "a repeated position prints twice");
+    assert_eq!(
+        layout(&[(200.0, 300.0)], &tiled(Some(vec![1, 1]))).unwrap(),
+        vec![all[1].clone(), all[1].clone()],
+        "a repeated position prints its sheet twice, identical"
+    );
     // `None` keeps every sheet, as before the choice existed.
-    assert_eq!(layout(&[(200.0, 300.0)], &tiled(None)).unwrap().len(), 4);
+    assert_eq!(layout(&[(200.0, 300.0)], &tiled(None)).unwrap(), all);
 }
 
 #[test]
